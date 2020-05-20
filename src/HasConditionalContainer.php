@@ -20,7 +20,9 @@ use Laravel\Nova\Http\Controllers\ResourceIndexController;
 use Laravel\Nova\Http\Controllers\ResourceStoreController;
 use Laravel\Nova\Http\Controllers\ResourceUpdateController;
 use Laravel\Nova\Http\Controllers\UpdateFieldController;
+use Laravel\Nova\Http\Requests\CreateResourceRequest;
 use Laravel\Nova\Http\Requests\NovaRequest;
+use Laravel\Nova\Http\Requests\UpdateResourceRequest;
 use Laravel\Nova\Panel;
 use NovaAttachMany\AttachMany;
 use Whitecube\NovaFlexibleContent\Flexible;
@@ -165,6 +167,10 @@ trait HasConditionalContainer
         }
 
         $allFields = $this->fields($request);
+
+        if($request instanceof CreateResourceRequest || $request instanceof UpdateResourceRequest) {
+            $allFields = $this->validationResourceFields($request);
+        }
         $containers = $this->findAllContainers($allFields);
         $expressionsMap = $containers->flatMap->expressions;
         $flexibleContent = $this->findAllFlexibleContentFields($allFields);
@@ -181,6 +187,83 @@ trait HasConditionalContainer
 
         return new FieldCollection(array_values($this->filter($fields->toArray())));
 
+    }
+
+    private function validationResourceFields($request)
+    {
+        $allFields = $this->fields($request);
+
+        $interceptFields = collect($allFields)->map(function($field) use ($request) {
+
+            if($field instanceof Flexible) {
+
+                $fieldValues = $request->{$field->attribute};
+
+                $clone = new Flexible($field->name, $field->attribute, $field->resolveCallback);
+
+                $field->meta[ 'layouts' ]->map(static function (Layout $field) use ($request, $fieldValues) {
+
+                    $fields = array();
+
+                    foreach($field->fields() as $aField) {
+                        if($aField instanceof ConditionalContainer) {
+
+                            foreach($aField->expressions as $expression) {
+
+                                list($checkField, $operator, $value) = explode(' ', $expression);
+
+                                if($fieldValues) {
+
+                                    foreach($fieldValues as $fieldValue) {
+
+                                        if($fieldValue['attributes'][$checkField] == $value) {
+
+                                            foreach($aField->fields as $bField) {
+
+                                                array_push($fields, $bField);
+
+                                            }
+
+                                        }
+
+                                    }
+
+                                }
+
+                            }
+
+                        }
+
+                        else {
+
+                            array_push($fields, $aField);
+
+                        }
+
+                    }
+
+                    return new $field(
+                        $field->title(),
+                        $field->name(),
+                        $fields,
+                        $field->key(),
+                        $field->getAttributes());
+
+                })->each(static function (Layout $layout) use ($clone) {
+
+                    $clone->addLayout($layout);
+
+                });
+
+                return $clone;
+
+            }
+
+            return $field;
+
+        });
+
+        return $interceptFields->toArray();
     }
 
     private function injectMetaIntoFields(Collection $flexibleContents, Collection $expressionsMap): Collection
